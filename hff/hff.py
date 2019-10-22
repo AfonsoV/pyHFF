@@ -1,4 +1,5 @@
 import glob
+import numpy as np
 import configparser
 from .errors import hffError
 
@@ -37,8 +38,8 @@ class HFFData:
         raise hffError(f"Coordinates {ra},{dec} outside cluster boundaries.")
         return None
 
-    def find_all_models(self,rejectList=[]):
-        allFiles = glob.glob(f"{self.folder}/*/v*/*.fits")
+    def find_all_models(self,dataFolder,rejectList=[]):
+        allFiles = glob.glob(f"{dataFolder}/*/v*/*.fits")
         roots = []
         for f in allFiles:
             reject = False
@@ -56,9 +57,7 @@ class HFFData:
 
     def load_data(self,cluster,rejectModels=[]):
         lens_models_folder = f"{self.folder}/{cluster}"
-        print(lens_models_folder)
-        lensModelNames = self.find_all_models(rejectModels)
-        print(lensModelNames)
+        lensModelNames = self.find_all_models(lens_models_folder,rejectModels)
         nModels = len(lensModelNames)
         ConfigFile = configparser.ConfigParser()
         ConfigFile.read("%s/models.cfg"%(lens_models_folder))
@@ -80,30 +79,31 @@ class HFFData:
         self.lensing_data[cluster] = {}
         self.lensing_data[cluster]["models"] = modelsLensing
         self.lensing_data[cluster]["redshift"] = redshiftLens
-        return modelsLensing
+        return modelsLensing,redshiftLens
 
 
     def get_lensing_pars(self,coords,size,redshift,pixScaleLensStack = 0.2,rejectModels=[]):
         if _HAS_ASTROMORPH is False:
             raise hffError("Need to have astromorph package installed. Check https://github.com/AfonsoV/astromorph.")
+
         cluster = self.get_cluster_from_coords(coords)
         if not cluster in self.lensing_data.keys():
-            modelData = self.load_data(cluster,rejectModels=rejectModels)
+            modelData,redshiftLens = self.load_data(cluster,rejectModels=rejectModels)
         else:
-            modelData = self.lensing_data[cluster]
+            modelData = self.lensing_data[cluster]["models"]
+            redshiftLens = self.lensing_data[cluster]["redshift"]
 
         stackRA = (coords.ra.value-size/(2*3600.),coords.ra.value+size/(2*3600.))
         stackDEC = (coords.dec.value-size/(2*3600.),coords.dec.value+size/(2*3600.))
 
-        print("\tStacking Lens Models...")
-        modelStack = stack_models(lensModels,stackRA,stackDEC,\
-                                  scale=pixScaleLensStack/3600.0,\
-                                  modelbbox=(1.1*size,coords))
+        modelStack,ExtentStack = stack_models(modelData,stackRA,stackDEC,\
+                                 scale=pixScaleLensStack/3600.0,\
+                                 modelbbox=(1.1*size,coords))
         ExtentModel = stackRA+stackDEC
 
         LensParsGalaxyFull = []
         for i in range(3):
-            LensingModelStacked = LensingModel(lensRedshift,pixScaleLensStack)
+            LensingModelStacked = LensingModel(redshiftLens,pixScaleLensStack)
             LensingModelStacked.set_lensing_data(kappa=modelStack[i,0,:,:],gamma=modelStack[i,1,:,:],\
                                                  xdeflect=modelStack[i,2,:,:],ydeflect=modelStack[i,3,:,:],\
                                                  extent=ExtentModel)
@@ -115,7 +115,6 @@ class HFFData:
         LensParsGalaxyFull = np.asarray(LensParsGalaxyFull)
         errorsLensPars = LensParsGalaxyFull[1:]-LensParsGalaxyFull[:-1]
         LensPars = LensParsGalaxyFull[1,:]
-        print(errorsLensPars.shape)
         return LensPars,errorsLensPars
 
     def get_magnification(self,coords,size,redshift,pixScaleLensStack = 0.2,rejectModels=[]):
@@ -124,5 +123,5 @@ class HFFData:
                               rejectModels=rejectModels)
 
         mu = pars[2]
-        mu_err = errors[2,:]
+        mu_err = errors[:,2]
         return mu,mu_err
